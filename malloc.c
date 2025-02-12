@@ -22,7 +22,7 @@ uint8_t *allocHeap(uint8_t *currentHeap, uint64_t size)
                 return newHeap;
         }
 	uint8_t *newstart = sbrk(size - heapSize);
-	if(newstart == NULL) return NULL;
+	if(newstart == (void *)-1) return NULL; // Fix: Proper NULL return on failure
 	heapSize += size;
 	return currentHeap;
 }
@@ -56,6 +56,10 @@ Block *_firstFreeBlock;
 void initAllocator()
 {
         _heapStart = allocHeap(NULL, HEAP_SIZE);
+	if (_heapStart == NULL) {
+		fprintf(stderr, "Heap initialization failed.\n");
+		return;
+	}
 	_heapSize = HEAP_SIZE;
 
 	_firstFreeBlock = (Block *)_heapStart;
@@ -78,20 +82,22 @@ uint64_t roundUp(uint64_t n)
 	return (n + 15) & ~15;
 }
 
-static void *allocate_block(Block **update_next, Block *block, uint64_t new_size)
-{
-	(void)update_next;
-	(void)block;
-	(void)new_size;
-	return NULL;
-}
-
 void *my_malloc(uint64_t size)
 {
 	if (size == 0) return NULL;
 
 	size = roundUp(size) + sizeof(Block);
-	if (_firstFreeBlock == NULL) return NULL;
+	if (_firstFreeBlock == NULL) {
+		uint8_t *newHeap = allocHeap(_heapStart, _heapSize + HEAP_SIZE);
+		if (newHeap == NULL) return NULL; // No more memory available
+
+		_heapSize += HEAP_SIZE;
+		
+		Block *newBlock = (Block *)(_heapStart + _heapSize - HEAP_SIZE);
+		newBlock->size = HEAP_SIZE - sizeof(Block);
+		newBlock->next = _firstFreeBlock;
+		_firstFreeBlock = newBlock;
+	}
 
 	Block *bestFit = NULL, **prevBestFit = NULL;
 	Block **prev = &_firstFreeBlock;
@@ -117,6 +123,7 @@ void *my_malloc(uint64_t size)
 		newBlock->size = bestFit->size - size;
 		newBlock->next = _firstFreeBlock;
 		_firstFreeBlock = newBlock;
+
 		bestFit->size = size;
 	}
 
@@ -124,28 +131,32 @@ void *my_malloc(uint64_t size)
 	return bestFit->data;
 }
 
-static void merge_blocks(Block *block1, Block *block2)
-{
-	if ((uint8_t *)block1 + block1->size == (uint8_t *)block2) {
-		block1->size += block2->size;
-		block1->next = block2->next;
-	}
-}
-
 void my_free(void *address)
 {
 	if (!address) return;
 
 	Block *block = (Block *)((uint8_t *)address - sizeof(Block));
-	block->next = _firstFreeBlock;
-	_firstFreeBlock = block;
 
+	Block **prev = &_firstFreeBlock;
 	Block *current = _firstFreeBlock;
-	while (current && current->next) {
-		if ((uint8_t *)current + current->size == (uint8_t *)current->next) {
-			current->size += current->next->size;
-			current->next = current->next->next;
-		}
+	while (current && current < block) {
+		prev = &current->next;
 		current = current->next;
+	}
+
+	block->next = current;
+	*prev = block;
+
+	if (current && (uint8_t *)block + block->size == (uint8_t *)current) {
+		block->size += current->size;
+		block->next = current->next;
+	}
+
+	if (prev != &_firstFreeBlock) {
+		Block *prevBlock = *prev;
+		if ((uint8_t *)prevBlock + prevBlock->size == (uint8_t *)block) {
+			prevBlock->size += block->size;
+			prevBlock->next = block->next;
+		}
 	}
 }
