@@ -75,7 +75,7 @@ void dumpAllocator()
 
 uint64_t roundUp(uint64_t n)
 {
-	return (n + 15) & ~15; //fancy trick I found on the internet for rounding up to the nearest multiple of 16.
+	return (n + 15) & ~15;
 }
 
 static void *allocate_block(Block **update_next, Block *block, uint64_t new_size)
@@ -88,46 +88,41 @@ static void *allocate_block(Block **update_next, Block *block, uint64_t new_size
 
 void *my_malloc(uint64_t size)
 {
-    if (size == 0) return NULL;
+	if (size == 0) return NULL;
 
-    size = roundUp(size) + sizeof(Block);
-    Block *bestFit = NULL, **prevBestFit = NULL;
-    Block **prev = &_firstFreeBlock;
-    Block *current = _firstFreeBlock;
+	size = roundUp(size) + sizeof(Block);
+	if (_firstFreeBlock == NULL) return NULL;
 
-try_alloc:
-    while (current) {
-        if (current->size >= size) {
-            if (!bestFit || current->size < bestFit->size) {
-                bestFit = current;
-                prevBestFit = prev;
-            }
-        }
-        prev = &current->next;
-        current = current->next;
-    }
+	Block *bestFit = NULL, **prevBestFit = NULL;
+	Block **prev = &_firstFreeBlock;
+	Block *current = _firstFreeBlock;
 
-    // If no suitable block is found, return NULL (no more memory available)
-    if (!bestFit) {
-        return NULL;  
-    }
+	while (current) {
+		if (current->size >= size) {
+			if (!bestFit || current->size < bestFit->size) {
+				bestFit = current;
+				prevBestFit = prev;
+			}
+		}
+		prev = &current->next;
+		current = current->next;
+	}
 
-    // Remove the block from free list
-    *prevBestFit = bestFit->next;
+	if (!bestFit) return NULL;
 
-    // Split block if there's enough space for a new block
-    if (bestFit->size >= size + sizeof(Block)) {
-        Block *newBlock = (Block *)((uint8_t *)bestFit + size);
-        newBlock->size = bestFit->size - size;
-        newBlock->next = _firstFreeBlock;
-        _firstFreeBlock = newBlock;
-        bestFit->size = size;
-    }
+	*prevBestFit = bestFit->next;
 
-    bestFit->next = (Block *)0xfeedcafefeedcafe;
-    return bestFit->data;
+	if (bestFit->size > size + sizeof(Block)) {
+		Block *newBlock = (Block *)((uint8_t *)bestFit + size);
+		newBlock->size = bestFit->size - size;
+		newBlock->next = _firstFreeBlock;
+		_firstFreeBlock = newBlock;
+		bestFit->size = size;
+	}
+
+	bestFit->next = (Block *)0xfeedcafefeedcafe;
+	return bestFit->data;
 }
-
 
 static void merge_blocks(Block *block1, Block *block2)
 {
