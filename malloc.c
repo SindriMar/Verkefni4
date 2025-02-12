@@ -1,59 +1,19 @@
-#define USE_REAL_SBRK 1 // Breyta yfir í 1 fyrir skil!
-#pragma GCC diagnostic ignored "-Wunused-function"
-
-#if USE_REAL_SBRK
-#define _GNU_SOURCE
-
-#include <sys/mman.h>
 #include <stddef.h>
 #include <stdio.h> 
 #include <assert.h>
 #include <unistd.h>
-
 #include "malloc.h"
 
-uint8_t *allocHeap(uint8_t *currentHeap, uint64_t size)
-{               
-    static uint64_t heapSize = 0;
-    if (currentHeap == NULL) {
-        uint8_t *newHeap = sbrk(size);
-        if (newHeap) heapSize = size;
-        return newHeap;
-    }
-    uint8_t *newstart = sbrk(size - heapSize);
-    if (newstart == NULL) return NULL;
-    heapSize += size;
-    return currentHeap;
-}
-#else
-#include <stddef.h>
-#include <stdio.h>
-#include <assert.h>
-#include <unistd.h>
-#include <stdlib.h>
-
-#include "malloc.h"
-
-uint8_t *allocHeap(uint8_t *currentHeap, uint64_t size)
-{
-    static uint64_t heapSize = 0;
-    if (currentHeap == NULL) {
-        uint8_t *newHeap = malloc(10 * size);
-        if (newHeap) heapSize = 10 * size;
-        return newHeap;
-    }
-    if (size <= heapSize) return currentHeap;
-    return NULL;
-}
-#endif
-
+// Global variables
 uint8_t *_heapStart = NULL;
 uint64_t _heapSize = 0;
-Block *_firstFreeBlock;
+Block *_firstFreeBlock = NULL;
 
+// Initializes the allocator with one free block spanning the initial heap.
 void initAllocator()
 {
     _heapStart = allocHeap(NULL, HEAP_SIZE);
+    assert(_heapStart != NULL);
     _heapSize = HEAP_SIZE;
 
     _firstFreeBlock = (Block *)_heapStart;
@@ -61,33 +21,77 @@ void initAllocator()
     _firstFreeBlock->next = NULL;
 }
 
-static Block *_getNextBlockBySize(const Block *current)
-{
-    return (Block *)((uint8_t *)current + current->size);
-}
-
-void dumpAllocator()
-{
-    // See lab tutorial
-}
-
+// Rounds up n to the next multiple of 16.
 uint64_t roundUp(uint64_t n)
 {
-    return (n + 15) & ~15; // Fancy trick for rounding up to the nearest multiple of 16.
+    return (n + 15) & ~15;
 }
 
-void *my_malloc(uint64_t size)
+/*
+  insertFreeBlock()
+  
+  Inserts the given free block into the free-list (which is maintained in
+  sorted order by address) and then merges it with its neighbors if they
+  are contiguous.
+*/
+static void insertFreeBlock(Block *block)
 {
-    if (size == 0) return NULL;
-    size = roundUp(size) + sizeof(Block);
+    // Insert block into the free list in sorted order.
+    if (_firstFreeBlock == NULL || block < _firstFreeBlock) {
+        block->next = _firstFreeBlock;
+        _firstFreeBlock = block;
+    } else {
+        Block *curr = _firstFreeBlock;
+        while (curr->next && curr->next < block)
+            curr = curr->next;
+        block->next = curr->next;
+        curr->next = block;
+    }
 
-    Block *bestFit = NULL, **prevBestFit = NULL;
+    // Merge with the next block if adjacent.
+    if (block->next && ((uint8_t*)block + block->size == (uint8_t*)block->next)) {
+        block->size += block->next->size;
+        block->next = block->next->next;
+    }
+    
+    // Merge with the previous block if adjacent.
+    if (_firstFreeBlock != block) {
+        Block *prev = _firstFreeBlock;
+        while (prev && prev->next != block)
+            prev = prev->next;
+        if (prev && ((uint8_t*)prev + prev->size == (uint8_t*)block)) {
+            prev->size += block->size;
+            prev->next = block->next;
+        }
+    }
+}
+
+/*
+  my_malloc()
+  
+  Tries to find a free block that fits the requested user size (after rounding
+  and adding the header size). If no free block is large enough, the heap is extended.
+  On allocation the chosen free block is removed from the free list; if it is large
+  enough to split then it is split and the remainder is reinserted.
+  
+  Note: We do not change the provided allocHeap() code.
+*/
+void *my_malloc(uint64_t userSize)
+{
+    if (userSize == 0)
+        return NULL;
+    
+    // Compute total size needed: round up the payload then add the header.
+    uint64_t totalSize = roundUp(userSize) + sizeof(Block);
+
+    Block *bestFit = NULL;
+    Block **prevBestFit = NULL;
     Block **prev = &_firstFreeBlock;
     Block *current = _firstFreeBlock;
 
-    // Find best-fit block
+    // Search for a free block that is large enough.
     while (current) {
-        if (current->size >= size) {
+        if (current->size >= totalSize) {
             if (!bestFit || current->size < bestFit->size) {
                 bestFit = current;
                 prevBestFit = prev;
@@ -97,62 +101,51 @@ void *my_malloc(uint64_t size)
         current = current->next;
     }
 
-    // If no suitable block found, return NULL
-    if (!bestFit || bestFit->size < size) return NULL;
-
-    // Remove block from the free list
-    *prevBestFit = bestFit->next;
-
-    // Split the block if there’s enough space for a new free block
-    if (bestFit->size >= size + sizeof(Block) + 16) {
-        Block *newBlock = (Block *)((uint8_t *)bestFit + size);
-        newBlock->size = bestFit->size - size;
-        newBlock->next = _firstFreeBlock;
-        _firstFreeBlock = newBlock;
-        bestFit->size = size;
+    // If no free block is large enough, try extending the heap.
+    if (!bestFit) {
+        uint64_t oldHeapSize = _heapSize;
+        uint64_t newHeapSize = _heapSize + HEAP_SIZE; // Extend by HEAP_SIZE bytes.
+        uint8_t *res = allocHeap(_heapStart, newHeapSize);
+        if (res == NULL)
+            return NULL;
+        // Create a free block covering the newly allocated area.
+        Block *newBlock = (Block *)(_heapStart + oldHeapSize);
+        newBlock->size = newHeapSize - oldHeapSize;
+        newBlock->next = NULL;
+        insertFreeBlock(newBlock);
+        _heapSize = newHeapSize;
+        // Retry allocation.
+        return my_malloc(userSize);
     }
 
-    bestFit->next = (Block *)0xfeedcafefeedcafe; // Mark as allocated
+    // Remove the chosen block from the free list.
+    *prevBestFit = bestFit->next;
+
+    // If the block is large enough, split it into an allocated part and a free part.
+    if (bestFit->size >= totalSize + sizeof(Block) + 16) {
+        Block *newBlock = (Block *)((uint8_t *)bestFit + totalSize);
+        newBlock->size = bestFit->size - totalSize;
+        newBlock->next = NULL;
+        bestFit->size = totalSize;
+        insertFreeBlock(newBlock);
+    }
+
+    // Mark the block as allocated.
+    bestFit->next = (Block *)0xfeedcafefeedcafe;
     return bestFit->data;
 }
 
-static void merge_blocks(Block *block1, Block *block2)
-{
-    if ((uint8_t *)block1 + block1->size == (uint8_t *)block2) {
-        block1->size += block2->size;
-        block1->next = block2->next;
-    }
-}
-
+/*
+  my_free()
+  
+  Frees the block by converting the given data pointer into its header pointer
+  and then inserting it (and merging with any adjacent free blocks) into the free list.
+*/
 void my_free(void *address)
 {
-    if (!address) return;
-
+    if (!address)
+        return;
     Block *block = (Block *)((uint8_t *)address - sizeof(Block));
-
-    // Insert the block into the free list in sorted order
-    Block **prev = &_firstFreeBlock;
-    Block *current = _firstFreeBlock;
-    while (current && current < block) {
-        prev = &current->next;
-        current = current->next;
-    }
-
-    block->next = current;
-    *prev = block;
-
-    // Merge with next block if adjacent
-    if (current && (uint8_t *)block + block->size == (uint8_t *)current) {
-        block->size += current->size;
-        block->next = current->next;
-    }
-
-    // Merge with previous block if adjacent
-    if (prev != &_firstFreeBlock) {
-        Block *prevBlock = *prev;
-        if ((uint8_t *)prevBlock + prevBlock->size == (uint8_t *)block) {
-            prevBlock->size += block->size;
-            prevBlock->next = block->next;
-        }
-    }
+    block->next = NULL;
+    insertFreeBlock(block);
 }
