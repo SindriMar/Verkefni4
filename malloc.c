@@ -106,7 +106,7 @@ void *my_malloc(uint64_t size)
 		current = current->next;
 	}
 
-	if (!bestFit) return NULL;
+	if (!bestFit || bestFit->size < size) return NULL;
 
 	*prevBestFit = bestFit->next; 
 
