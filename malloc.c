@@ -88,59 +88,45 @@ static void *allocate_block(Block **update_next, Block *block, uint64_t new_size
 
 void *my_malloc(uint64_t size)
 {
-	if (size == 0) return NULL;
-	size = roundUp(size) + sizeof(Block);
 
 	Block *bestFit = NULL, **prevBestFit = NULL;
 	Block **prev = &_firstFreeBlock;
 	Block *current = _firstFreeBlock;
+    Block *current = _firstFreeBlock;
 
 try_alloc:
-	while (current) {
-		if (current->size >= size) {
-			if (!bestFit || current->size < bestFit->size) {
-				bestFit = current;
-				prevBestFit = prev;
-			}
-		}
-		prev = &current->next;
-		current = current->next;
-	}
+    while (current) {
+        if (current->size >= size) {
+            if (!bestFit || current->size < bestFit->size) {
+                bestFit = current;
+                prevBestFit = prev;
+            }
+        }
+        prev = &current->next;
+        current = current->next;
+    }
 
-	// If no suitable block found, try to expand heap
-	if (!bestFit) {
-		uint8_t *newHeap = allocHeap(_heapStart, _heapSize + HEAP_SIZE);
-		if (!newHeap) return NULL; // If heap expansion fails, return NULL
+    // If no suitable block is found, return NULL (no more memory available)
+    if (!bestFit) {
+        return NULL;  
+    }
 
-		Block *newBlock = (Block *)(_heapStart + _heapSize);
-		newBlock->size = HEAP_SIZE;
-		newBlock->next = _firstFreeBlock;
-		_firstFreeBlock = newBlock;
-		_heapSize += HEAP_SIZE;
+    // Remove the block from free list
+    *prevBestFit = bestFit->next;
 
-		// Restart search for best-fit block
-		bestFit = NULL;
-		prevBestFit = NULL;
-		prev = &_firstFreeBlock;
-		current = _firstFreeBlock;
-		goto try_alloc;
-	}
+    // Split block if there's enough space for a new block
+    if (bestFit->size >= size + sizeof(Block)) {
+        Block *newBlock = (Block *)((uint8_t *)bestFit + size);
+        newBlock->size = bestFit->size - size;
+        newBlock->next = _firstFreeBlock;
+        _firstFreeBlock = newBlock;
+        bestFit->size = size;
+    }
 
-	// Remove the block from free list
-	*prevBestFit = bestFit->next;
-
-	// Split block if there's enough space for a new block
-	if (bestFit->size > size + sizeof(Block)) {
-		Block *newBlock = (Block *)((uint8_t *)bestFit + size);
-		newBlock->size = bestFit->size - size;
-		newBlock->next = _firstFreeBlock;
-		_firstFreeBlock = newBlock;
-		bestFit->size = size;
-	}
-
-	bestFit->next = (Block *)0xfeedcafefeedcafe;
-	return bestFit->data;
+    bestFit->next = (Block *)0xfeedcafefeedcafe;
+    return bestFit->data;
 }
+
 
 static void merge_blocks(Block *block1, Block *block2)
 {
