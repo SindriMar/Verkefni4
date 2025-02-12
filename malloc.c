@@ -13,7 +13,7 @@
 #include "malloc.h"
 
 uint8_t *allocHeap(uint8_t *currentHeap, uint64_t size)
-{               
+{                
         static uint64_t heapSize = 0;
         if( currentHeap == NULL ) {
                 uint8_t *newHeap  = sbrk(size);
@@ -110,15 +110,15 @@ try_alloc:
 	// If no suitable block found, try to expand heap
 	if (!bestFit) {
 		uint8_t *newHeap = allocHeap(_heapStart, _heapSize + HEAP_SIZE);
-		if (!newHeap) return NULL;
-		
-		Block *newBlock = (Block *)(_heapStart + _heapSize - sizeof(Block));
+		if (!newHeap) return NULL; // If heap expansion fails, return NULL
+
+		Block *newBlock = (Block *)(_heapStart + _heapSize);
 		newBlock->size = HEAP_SIZE;
 		newBlock->next = _firstFreeBlock;
 		_firstFreeBlock = newBlock;
 		_heapSize += HEAP_SIZE;
-		
-		// Reset search parameters and try again
+
+		// Restart search for best-fit block
 		bestFit = NULL;
 		prevBestFit = NULL;
 		prev = &_firstFreeBlock;
@@ -130,7 +130,7 @@ try_alloc:
 	*prevBestFit = bestFit->next;
 
 	// Split block if there's enough space for a new block
-	if (bestFit->size > size + sizeof(Block) + 16) {
+	if (bestFit->size > size + sizeof(Block)) {
 		Block *newBlock = (Block *)((uint8_t *)bestFit + size);
 		newBlock->size = bestFit->size - size;
 		newBlock->next = _firstFreeBlock;
@@ -160,7 +160,10 @@ void my_free(void *address)
 
 	Block *current = _firstFreeBlock;
 	while (current && current->next) {
-		merge_blocks(current, current->next);
+		if ((uint8_t *)current + current->size == (uint8_t *)current->next) {
+			current->size += current->next->size;
+			current->next = current->next->next;
+		}
 		current = current->next;
 	}
 }
