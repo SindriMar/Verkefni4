@@ -95,6 +95,7 @@ void *my_malloc(uint64_t size)
 	Block **prev = &_firstFreeBlock;
 	Block *current = _firstFreeBlock;
 
+try_alloc:
 	while (current) {
 		if (current->size >= size) {
 			if (!bestFit || current->size < bestFit->size) {
@@ -106,11 +107,30 @@ void *my_malloc(uint64_t size)
 		current = current->next;
 	}
 
-	if (!bestFit || bestFit->size < size) return NULL;
+	// If no suitable block found, try to expand heap
+	if (!bestFit) {
+		uint8_t *newHeap = allocHeap(_heapStart, _heapSize + HEAP_SIZE);
+		if (!newHeap) return NULL;
+		
+		Block *newBlock = (Block *)(_heapStart + _heapSize - sizeof(Block));
+		newBlock->size = HEAP_SIZE;
+		newBlock->next = _firstFreeBlock;
+		_firstFreeBlock = newBlock;
+		_heapSize += HEAP_SIZE;
+		
+		// Reset search parameters and try again
+		bestFit = NULL;
+		prevBestFit = NULL;
+		prev = &_firstFreeBlock;
+		current = _firstFreeBlock;
+		goto try_alloc;
+	}
 
-	*prevBestFit = bestFit->next; 
+	// Remove the block from free list
+	*prevBestFit = bestFit->next;
 
-	if (bestFit->size >= size + sizeof(Block)) {
+	// Split block if there's enough space for a new block
+	if (bestFit->size > size + sizeof(Block) + 16) {
 		Block *newBlock = (Block *)((uint8_t *)bestFit + size);
 		newBlock->size = bestFit->size - size;
 		newBlock->next = _firstFreeBlock;
