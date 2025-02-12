@@ -88,10 +88,11 @@ static void *allocate_block(Block **update_next, Block *block, uint64_t new_size
 
 void *my_malloc(uint64_t size)
 {
+    if (size == 0) return NULL;
 
-	Block *bestFit = NULL, **prevBestFit = NULL;
-	Block **prev = &_firstFreeBlock;
-	Block *current = _firstFreeBlock;
+    size = roundUp(size) + sizeof(Block);
+    Block *bestFit = NULL, **prevBestFit = NULL;
+    Block **prev = &_firstFreeBlock;
     Block *current = _firstFreeBlock;
 
 try_alloc:
